@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -161,11 +163,17 @@ func (t *archeraComparisonTool) handle(ctx context.Context, _ *mcp.CallToolReque
 	return nil, *dto, nil
 }
 
+// archeraWithheld replaces error text that still contains the key after
+// masking (a splitter the strip does not remove).
+const archeraWithheld = "archera request failed (error text withheld: contained credential material)"
+
 // archeraError reports a vendor failure by status and Retry-After only: the
-// vendor message is dropped. A context error is returned unchanged. Any other
-// error (decode, transport, request validation) can quote vendor values
-// uncapped, so it is stripped of control characters, key-masked and then capped at
-// 256 bytes (the go library does not bound it yet: go#336).
+// vendor message is dropped. Any other error (decode, transport, request
+// validation, context) can quote vendor values uncapped, so its text is
+// stripped of control characters, key-masked and then capped at 256 bytes (the
+// go library does not bound it yet: go#336). If the key can still be read
+// through the remaining text once combining marks, spaces and the like are
+// ignored, the whole text is withheld. A context error keeps errors.Is/As.
 func archeraError(err error, key string) error {
 	var he *insurance.HTTPError
 	if errors.As(err, &he) {
@@ -175,16 +183,52 @@ func archeraError(err error, key string) error {
 		}
 		return fmt.Errorf("archera request failed: HTTP %d; %s", he.StatusCode, retry)
 	}
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
+	key = strings.TrimSpace(key)
 	// Strip before masking: stripping after would reassemble a key the vendor
 	// echoed with zero-width or bidi characters spliced into it.
 	msg := archeraStripUnsafe(err.Error())
-	if key = strings.TrimSpace(key); key != "" {
+	if key != "" {
 		msg = strings.ReplaceAll(msg, key, "[redacted]")
 	}
-	return errors.New(archeraCleanString(msg))
+	msg = archeraCleanString(msg)
+	if key != "" && strings.Contains(archeraSkeleton(msg), archeraSkeleton(key)) {
+		msg = archeraWithheld
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if msg == err.Error() {
+			return err
+		}
+		return &archeraSanitizedError{msg: msg, err: err}
+	}
+	return errors.New(msg)
+}
+
+// archeraSanitizedError carries sanitized text for a context error while
+// keeping the original for errors.Is and errors.As.
+type archeraSanitizedError struct {
+	err error
+	msg string
+}
+
+func (e *archeraSanitizedError) Error() string { return e.msg }
+func (e *archeraSanitizedError) Unwrap() error { return e.err }
+
+// archeraSkeleton drops every rune that can hide or space out a key: control,
+// format, combining, separator and variation-selector runes, Hangul fillers
+// and invalid bytes.
+func archeraSkeleton(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case utf8.RuneError, 0x115F, 0x1160, 0x3164, 0xFFA0:
+			continue
+		}
+		if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Mn, unicode.Me, unicode.Zl, unicode.Zp, unicode.Zs) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 // archeraCheckSize fails loud when the marshaled result exceeds the cap.
