@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and `ARCHERA_PLAN_ID`; unconfigured calls error and send no request. It
   reads `https://api.archera.ai` only, never retries, and makes no purchase.
 
+### Security
+
+- `cudly_archera_comparison`: a transport error that echoed the API key with
+  zero-width, bidi or control characters spliced into it could reassemble the
+  plain key in the tool error, because the key was masked before those
+  characters were stripped. Text is now stripped, then masked, then capped.
+
 ### Changed
 
 - The purchase audit log records a new status, `unknown`, for a purchase that

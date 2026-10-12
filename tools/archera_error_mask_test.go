@@ -77,3 +77,10 @@ func TestArcheraErrorMasksKeyOnRealPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestArcheraErrorLeavesNoKeyPrefixAtCap(t *testing.T) {
+	for _, echo := range []string{maskTestKey, splitKey("​")} {
+		got := archeraError(errors.New(strings.Repeat("a", 244)+echo), maskTestKey).Error()
+		assert.False(t, strings.HasSuffix(got, maskTestKey[:8]) || strings.Contains(got, maskTestKey[:8]), got)
+	}
+}
