@@ -126,6 +126,19 @@ run_case "secret before an otherwise-allowed truncated PEM, same line" 1 l.go \
 run_case "secret after an otherwise-allowed truncated PEM, same line" 1 m.go \
     '"private_key": "'"$PEM"'\nMIIEvQIBADANBg...\n'"$KEY"'"'
 
+# Bare placeholder digits/UUID must not exempt a line from the other detectors
+# (#24): each line below carries a fixture that is caught on its own.
+run_case "key beside a placeholder account ID" 1 o.txt \
+    'acct 123456789012 key '"$KEY"
+run_case "password beside a placeholder account ID" 1 p.txt \
+    'account''_id = "123456789012" // pass''word = "hunter2hunter2"'
+run_case "GCP key beside a placeholder UUID" 1 q.txt \
+    "$AIZA 11111111-1111-1111-1111-111111111111"
+# Live-detector control: a non-placeholder account ID is flagged, so the
+# clean cases below are not passing because the detector is dead.
+run_case "account ID assignment is still detected" 1 r.txt \
+    'account''_id="123456789013"'
+
 # Negative controls for the setup-script allowlist entries below, each
 # closing one instance of the same class of hole (#1972 reintroduced at
 # the scale of one file) that a narrower-but-still-wrong anchor leaves
@@ -166,6 +179,12 @@ run_case "PEM word fragments are not a real header" 0 k.txt \
     'this is PRIVATE data
 algo EC here
 -----BEGIN CERTIFICATE-----'
+run_case "the one placeholder account ID fixture scans clean" 0 tools/purchase_test.go \
+    '		Acc''ount:       "123456789012",'
+run_case "placeholder fixture line with a trailing key is still caught" 1 tools/purchase_test.go \
+    '		Acc''ount:       "123456789012", k="'"$KEY"'"'
+run_case "Archera env name and test key scan clean" 0 u.go \
+    'EnvArcheraAPIKey = "ARCHERA_API_KEY"; testArcheraKey = "test-archera-key-0000"'
 run_staged_case ".gitallowed self-scan" 0 .gitallowed
 
 echo "$pass PASS, $fail FAIL"
