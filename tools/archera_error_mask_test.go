@@ -158,3 +158,14 @@ func TestArcheraErrorMasksKeyOnRealPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestArcheraErrorLeavesNoKeyPrefixAtAnyCut(t *testing.T) {
+	for name, sep := range map[string]string{"variation selector": "\ufe0f", "invalid byte": "\xff"} {
+		for pad := 220; pad <= 262; pad++ {
+			got := archeraError(errors.New(strings.Repeat("a", pad)+splitKey(sep)), maskTestKey).Error()
+			for k := 6; k <= len(maskTestKey); k++ {
+				require.NotContains(t, archeraSkeleton(got), maskTestKey[:k], "%s pad %d", name, pad)
+			}
+		}
+	}
+}

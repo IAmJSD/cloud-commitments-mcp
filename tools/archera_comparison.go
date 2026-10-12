@@ -183,17 +183,7 @@ func archeraError(err error, key string) error {
 		}
 		return fmt.Errorf("archera request failed: HTTP %d; %s", he.StatusCode, retry)
 	}
-	key = strings.TrimSpace(key)
-	// Strip before masking: stripping after would reassemble a key the vendor
-	// echoed with zero-width or bidi characters spliced into it.
-	msg := archeraStripUnsafe(err.Error())
-	if key != "" {
-		msg = strings.ReplaceAll(msg, key, "[redacted]")
-	}
-	msg = archeraCleanString(msg)
-	if key != "" && strings.Contains(archeraSkeleton(msg), archeraSkeleton(key)) {
-		msg = archeraWithheld
-	}
+	msg := archeraSanitizeText(err.Error(), key)
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		if msg == err.Error() {
 			return err
@@ -201,6 +191,28 @@ func archeraError(err error, key string) error {
 		return &archeraSanitizedError{msg: msg, err: err}
 	}
 	return errors.New(msg)
+}
+
+// archeraSanitizeText strips, masks and caps error text, or withholds it when
+// the key could still be read from it.
+func archeraSanitizeText(text, key string) string {
+	key = strings.TrimSpace(key)
+	// Strip before masking: stripping after would reassemble a key the vendor
+	// echoed with zero-width or bidi characters spliced into it.
+	msg := archeraStripUnsafe(text)
+	if key != "" {
+		msg = strings.ReplaceAll(msg, key, "[redacted]")
+	}
+	// Check the full text before the cap: a cut through a split key would hide
+	// it from the check while leaving a readable key prefix.
+	if key != "" && strings.Contains(archeraSkeleton(msg), archeraSkeleton(key)) {
+		return archeraWithheld
+	}
+	msg = archeraCleanString(msg)
+	if key != "" && archeraEndsWithKeyPrefix(archeraSkeleton(msg), archeraSkeleton(key)) {
+		return archeraWithheld
+	}
+	return msg
 }
 
 // archeraSanitizedError carries sanitized text for a context error while
@@ -212,6 +224,21 @@ type archeraSanitizedError struct {
 
 func (e *archeraSanitizedError) Error() string { return e.msg }
 func (e *archeraSanitizedError) Unwrap() error { return e.err }
+
+// archeraMinKeyPrefix is the shortest key prefix at the end of capped text that
+// counts as a leak.
+const archeraMinKeyPrefix = 6
+
+// archeraEndsWithKeyPrefix reports whether the text ends with the first
+// archeraMinKeyPrefix or more characters of the key, as left by a cut.
+func archeraEndsWithKeyPrefix(text, key string) bool {
+	for k := archeraMinKeyPrefix; k <= len(key); k++ {
+		if strings.HasSuffix(text, key[:k]) {
+			return true
+		}
+	}
+	return false
+}
 
 // archeraSkeleton drops every rune that can hide or space out a key: control,
 // format, combining, separator and variation-selector runes, Hangul fillers
