@@ -208,11 +208,7 @@ func archeraSanitizeText(text, key string) string {
 	if key != "" && strings.Contains(archeraSkeleton(msg), archeraSkeleton(key)) {
 		return archeraWithheld
 	}
-	msg = archeraCleanString(msg)
-	if key != "" && archeraEndsWithKeyPrefix(archeraSkeleton(msg), archeraSkeleton(key)) {
-		return archeraWithheld
-	}
-	return msg
+	return archeraCleanString(msg)
 }
 
 // archeraSanitizedError carries sanitized text for a context error while
@@ -224,21 +220,6 @@ type archeraSanitizedError struct {
 
 func (e *archeraSanitizedError) Error() string { return e.msg }
 func (e *archeraSanitizedError) Unwrap() error { return e.err }
-
-// archeraMinKeyPrefix is the shortest key prefix at the end of capped text that
-// counts as a leak.
-const archeraMinKeyPrefix = 6
-
-// archeraEndsWithKeyPrefix reports whether the text ends with the first
-// archeraMinKeyPrefix or more characters of the key, as left by a cut.
-func archeraEndsWithKeyPrefix(text, key string) bool {
-	for k := archeraMinKeyPrefix; k <= len(key); k++ {
-		if strings.HasSuffix(text, key[:k]) {
-			return true
-		}
-	}
-	return false
-}
 
 // archeraSkeleton drops every rune that can hide or space out a key: control,
 // format, combining, separator and variation-selector runes, Hangul fillers

@@ -90,6 +90,27 @@ func TestArcheraErrorWithholdsTextWhenKeyStaysReadable(t *testing.T) {
 	}
 }
 
+func TestArcheraErrorWithholdsWholeTextWithKeyAnywhere(t *testing.T) {
+	fe0f, ff := splitKey("\ufe0f"), splitKey("\xff")
+	half := maskTestKey[:10] + "\ufe0f" + maskTestKey[10:]
+	cases := map[string]string{
+		"text after":          "bad key " + fe0f + " was rejected",
+		"key at start":        fe0f + " was rejected",
+		"key in the middle":   "org x: " + ff + " not valid for plan y",
+		"split at one place":  "bad key " + half + " was rejected",
+		"two splitters":       "bad key " + maskTestKey[:5] + "\ufe0f" + maskTestKey[5:12] + "\xff" + maskTestKey[12:] + " tail",
+		"split key then text": "bad key " + fe0f + strings.Repeat("z", 400),
+	}
+	for pad := 200; pad <= 262; pad++ {
+		cases[fmt.Sprintf("straddles cut pad %d", pad)] = strings.Repeat("a", pad) + fe0f + " was rejected"
+	}
+	for name, msg := range cases {
+		t.Run(name, func(t *testing.T) {
+			assert.EqualError(t, archeraError(errors.New(msg), maskTestKey), archeraWithheld)
+		})
+	}
+}
+
 func TestArcheraErrorTrimsKeyBeforeMasking(t *testing.T) {
 	got := archeraError(errors.New("bad key "+splitKey("\u200b")), " "+maskTestKey+"\n").Error()
 	assert.Equal(t, "bad key [redacted]", got)
