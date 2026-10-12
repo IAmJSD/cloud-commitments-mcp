@@ -14,6 +14,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   and `ARCHERA_PLAN_ID`; unconfigured calls error and send no request. It
   reads `https://api.archera.ai` only, never retries, and makes no purchase.
 
+### Security
+
+- `cudly_archera_comparison`: a transport error that echoed the API key with
+  zero-width, bidi or control characters spliced into it could reassemble the
+  plain key in the tool error, because the key was masked before those
+  characters were stripped. Text is now stripped, then masked, then capped. A
+  transport error wrapping a context error is sanitized the same way (it
+  previously passed through unchanged), and error text is withheld when the
+  key is still readable after ignoring combining marks, spaces, variation
+  selectors, Hangul fillers and invalid bytes.
+
 ### Changed
 
 - `.gitallowed` no longer allow-lists bare placeholder account IDs and UUIDs,
