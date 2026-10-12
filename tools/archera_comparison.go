@@ -164,7 +164,7 @@ func (t *archeraComparisonTool) handle(ctx context.Context, _ *mcp.CallToolReque
 // archeraError reports a vendor failure by status and Retry-After only: the
 // vendor message is dropped. A context error is returned unchanged. Any other
 // error (decode, transport, request validation) can quote vendor values
-// uncapped, so it is key-masked, stripped of control characters and capped at
+// uncapped, so it is stripped of control characters, key-masked and then capped at
 // 256 bytes (the go library does not bound it yet: go#336).
 func archeraError(err error, key string) error {
 	var he *insurance.HTTPError
@@ -178,8 +178,10 @@ func archeraError(err error, key string) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	msg := err.Error()
-	if key != "" {
+	// Strip before masking: stripping after would reassemble a key the vendor
+	// echoed with zero-width or bidi characters spliced into it.
+	msg := archeraStripUnsafe(err.Error())
+	if key = strings.TrimSpace(key); key != "" {
 		msg = strings.ReplaceAll(msg, key, "[redacted]")
 	}
 	return errors.New(archeraCleanString(msg))

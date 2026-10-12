@@ -59,20 +59,31 @@ func archeraDecimal(r *big.Rat) (*string, error) {
 	return &s, nil
 }
 
-// archeraCleanString removes control, format and line/paragraph-separator characters
-// from vendor text and caps it at 256 bytes on a rune boundary.
-func archeraCleanString(s string) string {
+// archeraStripUnsafe removes control, format and line/paragraph-separator
+// characters from vendor text.
+func archeraStripUnsafe(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			continue
 		}
-		if b.Len()+utf8.RuneLen(r) > maxVendorStrLen {
-			break
-		}
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+// archeraCleanString strips unsafe characters from vendor text and caps it at
+// 256 bytes on a rune boundary.
+func archeraCleanString(s string) string {
+	s = archeraStripUnsafe(s)
+	if len(s) <= maxVendorStrLen {
+		return s
+	}
+	cut := maxVendorStrLen
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // archeraProductSupportDTO is the documentation-derived verdict for one offer.
