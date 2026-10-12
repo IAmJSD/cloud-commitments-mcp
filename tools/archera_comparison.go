@@ -120,7 +120,7 @@ func archeraConfig() (cfg insurance.Config, planID string, err error) {
 		}
 		return v
 	}
-	cfg.APIKey = get(EnvArcheraAPIKey)
+	cfg.APIKey = insurance.NewSecret(get(EnvArcheraAPIKey))
 	cfg.OrgID = get(EnvArcheraOrgID)
 	planID = get(EnvArcheraPlanID)
 	if len(missing) > 0 {
@@ -136,7 +136,7 @@ func (t *archeraComparisonTool) handle(ctx context.Context, _ *mcp.CallToolReque
 	if err != nil {
 		return nil, archeraComparisonDTO{}, err
 	}
-	key := cfg.APIKey
+	key := cfg.APIKey.Reveal()
 	client, err := insurance.NewClient(cfg, t.httpClient)
 	if err != nil {
 		return nil, archeraComparisonDTO{}, archeraError(err, key)
@@ -170,8 +170,9 @@ const archeraWithheld = "archera request failed (error text withheld: contained 
 // archeraError reports a vendor failure by status and Retry-After only: the
 // vendor message is dropped. Any other error (decode, transport, request
 // validation, context) can quote vendor values uncapped, so its text is
-// stripped of control characters, key-masked and then capped at 256 bytes (the
-// go library does not bound it yet: go#336). If the key can still be read
+// stripped of control characters, key-masked and then capped at 256 bytes. The
+// go library already sanitizes and caps its decode errors; this is a second
+// layer that also covers transport, validation and context errors. If the key can still be read
 // through the remaining text once combining marks, spaces and the like are
 // ignored, the whole text is withheld. A context error keeps errors.Is/As.
 func archeraError(err error, key string) error {

@@ -27,6 +27,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Bumped the `cloud-commitments-go` pins to main (9dae64b). `ARCHERA_API_KEY`
+  must now be printable ASCII (0x21-0x7E): the client rejects any other byte
+  and its error never echoes the key. Library decode errors now show only
+  short identifier-shaped values and are capped.
 - `.gitallowed` no longer allow-lists bare placeholder account IDs and UUIDs,
   which exempted any line containing them from every detector (#24). The one
   fixture the account-ID detector flags is allowed by a path- and line-anchored
