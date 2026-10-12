@@ -27,6 +27,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- `.gitallowed` no longer allow-lists bare placeholder account IDs and UUIDs,
+  which exempted any line containing them from every detector (#24). The one
+  fixture the account-ID detector flags is allowed by a path- and line-anchored
+  entry, and the allowlist self-test covers the bypass.
 - The purchase audit log records a new status, `unknown`, for a purchase that
   failed with `common.ErrOutcomeUnknown` (a lost EC2 or Redshift response: the
   commitment may exist). The stderr line reads `OUTCOME UNKNOWN`. Consumers
