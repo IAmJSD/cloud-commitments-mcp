@@ -362,7 +362,7 @@ func preflightRealPurchase(ctx context.Context, req PurchaseRequest, rec common.
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve %s service client: %w", rec.Provider, err)
 	}
-	usd, err := enforceUSDCap(ctx, client, rec, limits.usd)
+	usd, err := enforceUSDCap(ctx, client, rec, req.OfferingClass, limits.usd)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -423,10 +423,17 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 	}
 
 	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec, req.CredentialScope, req.Nonce, req.OfferingClass), 0)
+	requestedAt, err := firstAttemptTime(token, rec.Service)
+	if err != nil {
+		reservation.settle(false)
+		recordPurchaseRefusal(req, rec, err)
+		return nil, err
+	}
 	opts := common.PurchaseOptions{
 		Source:           common.PurchaseSourceMCP,
 		IdempotencyToken: token,
 		OfferingClass:    req.OfferingClass,
+		RequestedAt:      requestedAt,
 	}
 
 	return purchaseAndSettle(ctx, req, client, opts, reservation)

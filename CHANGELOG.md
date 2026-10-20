@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- Every real purchase passes `PurchaseOptions.RequestedAt`, the first-dispatch
+  time of its idempotency key, recorded before the provider call and reused on
+  retries (go#515: Redshift finds an earlier purchase by start time). With
+  `CUDLY_MCP_BUDGET_STATE` set it is persisted in `<state>.attempts` (30-day
+  retention; a corrupt or unwritable file refuses the purchase). Without it the
+  time is per process, and Redshift purchases are refused because their dedupe
+  must survive a restart.
 - `cudly_aws_ec2_ri_purchase` takes an optional `offering_class` (`standard` or
   `convertible`, default `convertible`). It is echoed in the response and
   recorded in the audit log (`raw_recommendation`).
@@ -50,6 +57,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed
 
+- Bumped the `cloud-commitments-go` pins to 1ce87bd. `computeengine.NewClient` no
+  longer takes a context (go#575); the GCP test call sites follow. Behavior
+  pulled in: Savings Plans in aws-cn are refused before any AWS call (go#566);
+  Azure Savings Plans refuse a malformed idempotency token before the purchase
+  PUT (e735fdb, go#495); Redshift purchases are deduped by DescribeReservedNodes
+  and require `RequestedAt` (go#515, see Added); remaining AWS and MemoryDB
+  pagination loops are capped (go#573); RDS reservations count against other
+  sizes of the same family in dedupe (go#564).
 - Bumped the `cloud-commitments-go` pins to main (9dae64b). `ARCHERA_API_KEY`
   must now be printable ASCII (0x21-0x7E): the client rejects any other byte
   and its error never echoes the key. Library decode errors now show only
@@ -95,6 +110,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- `cudly_aws_ec2_ri_purchase` with `offering_class=standard` is now capped by
+  `CUDLY_MCP_MAX_COMMITMENT_USD` and counted against `CUDLY_MCP_BUDGET_USD` at
+  the standard offering's price (`GetOfferingDetailsForClass`, go#574), not the
+  convertible one. A client that cannot price a class refuses a standard
+  purchase instead of falling back to convertible pricing.
 - The MCPB bundle no longer blocks sub-unit spend caps (for example 0.5 USD/h):
   the hourly-commitment and memory caps now declare `min` 0, and the server
   still rejects values `<= 0`.
