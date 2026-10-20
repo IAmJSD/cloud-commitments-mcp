@@ -72,6 +72,7 @@ func TestUSDCapEnvParsing(t *testing.T) {
 	assert.InDelta(t, 1000, got, 1e-9)
 }
 
+// sequential: writes the shared EnvAuditLog file
 func TestUSDCapRefusesRealGCPCUDPurchase(t *testing.T) {
 	rec, _, _, _, err := gcpComputeEngineRecommendationFromArgs(validGCPCUDArgs())
 	require.NoError(t, err)
