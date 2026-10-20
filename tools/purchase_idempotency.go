@@ -60,10 +60,18 @@ import (
 // purchase becomes a distinct one (e.g. "buy 3 now" then "buy 3 more next
 // week" by passing a fresh nonce on the second call); the same nonce plus
 // the same dimensions still dedupes a nonce'd retry.
-func idempotencyKeyFor(region string, rec common.Recommendation, scope, nonce string) string {
+func idempotencyKeyFor(region string, rec common.Recommendation, scope, nonce, offeringClass string) string {
+	details := detailsKeyComponent(rec.Details)
+	// Only a non-default class changes the key, so every request that was
+	// valid before offering_class existed (EC2 default = convertible, and all
+	// other tools) derives the exact token it always did; a retry spanning an
+	// upgrade must not double-buy.
+	if offeringClass != "" && offeringClass != string(OfferingClassConvertible) {
+		details += ";offering_class=" + offeringClass
+	}
 	return fmt.Sprintf("mcp:%s:%s:%s:%s:%s:%d:%s:%s:%s:%s",
 		rec.Provider, scope, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
-		detailsKeyComponent(rec.Details), nonce)
+		details, nonce)
 }
 
 // detailsKeyComponent returns a canonical, deterministic encoding of every

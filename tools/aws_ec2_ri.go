@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -20,7 +21,9 @@ var awsEC2RIPurchaseAnnotations = purchaseAnnotations(awsEC2RIPurchaseTitle)
 const awsEC2RIPurchaseDescription = "Purchase AWS EC2 Reserved Instances. THIS SPENDS REAL MONEY when " +
 	"dry_run=false and confirm=true. Always call with dry_run=true first (the default) to validate your " +
 	"parameters before committing; a dry_run response never contacts AWS and never spends money. Search first " +
-	"with cudly_search_recommendations to find a region/instance_type/count worth reserving."
+	"with cudly_search_recommendations to find a region/instance_type/count worth reserving. offering_class " +
+	"(standard or convertible, default convertible) sets the RI type: standard is typically cheaper but " +
+	"cannot be exchanged; it is echoed in the preview, so check it before buying."
 
 // ec2RIPurchaseArgs is the input schema for cudly_aws_ec2_ri_purchase. term
 // and payment_option map onto common.Recommendation.Term/PaymentOption;
@@ -38,6 +41,7 @@ type ec2RIPurchaseArgs struct {
 	Platform         string `json:"platform,omitempty" jsonschema:"RI product description (operating system); defaults to Linux/UNIX"`
 	Tenancy          string `json:"tenancy,omitempty" jsonschema:"instance tenancy; defaults to default (shared)"`
 	Scope            string `json:"scope,omitempty" jsonschema:"region or availability-zone; defaults to region"`
+	OfferingClass    string `json:"offering_class,omitempty" jsonschema:"standard (locked, typically cheaper) or convertible (exchangeable); defaults to convertible"`
 	AWSProfile       string `json:"aws_profile,omitempty" jsonschema:"AWS named profile override (~/.aws/config); default uses ambient credentials"`
 	IdempotencyNonce string `json:"idempotency_nonce,omitempty" jsonschema:"optional; set to a fresh value to authorize a purchase that is otherwise identical to a previous one (e.g. buy 3 more RIs with the same parameters); leave empty (the default) so retries with identical parameters dedupe and never double-buy"`
 	Count            int    `json:"count" jsonschema:"number of instances to reserve, must be > 0; real purchases are capped by the operator (CUDLY_MCP_MAX_COUNT)"`
@@ -74,6 +78,7 @@ func (t *awsEC2RIPurchaseTool) Register(s *mcp.Server) error {
 		"term_years":     {Enum: []any{int(TermOneYear), int(TermThreeYear)}},
 		"payment_option": {Enum: []any{string(PaymentOptionAllUpfront), string(PaymentOptionPartialUpfront), string(PaymentOptionNoUpfront)}},
 		"scope":          {Enum: []any{string(ScopeRegion), string(ScopeAvailabilityZone)}, Default: string(ScopeRegion)},
+		"offering_class": {Enum: []any{string(OfferingClassStandard), string(OfferingClassConvertible)}, Default: string(OfferingClassConvertible)},
 		"tenancy":        {Enum: []any{string(TenancyDefault), string(TenancyDedicated)}, Default: string(TenancyDefault)},
 		"dry_run":        {Default: true},
 		"confirm":        {Default: false},
@@ -95,6 +100,15 @@ func (t *awsEC2RIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReques
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
+	offeringClass, err := resolveOfferingClass(args.OfferingClass)
+	if err != nil {
+		return nil, PurchaseResponse{}, err
+	}
+	// The audit record has no offering-class field, so record it in the raw
+	// request payload alongside the other purchase parameters.
+	if rec.RawRecommendation, err = json.Marshal(map[string]string{"offering_class": string(offeringClass)}); err != nil {
+		return nil, PurchaseResponse{}, fmt.Errorf("encode offering_class for audit: %w", err)
+	}
 
 	resp, err := ExecutePurchase(ctx, PurchaseRequest{
 		Region:          region,
@@ -103,12 +117,22 @@ func (t *awsEC2RIPurchaseTool) handle(ctx context.Context, _ *mcp.CallToolReques
 		Confirm:         confirm,
 		ResolveClient:   t.resolveClient(args, region),
 		Nonce:           args.IdempotencyNonce,
+		OfferingClass:   string(offeringClass),
 		CredentialScope: requestCredentialScope(args.AWSProfile, dryRun, "AWS_PROFILE"),
 	})
 	if err != nil {
 		return nil, PurchaseResponse{}, err
 	}
 	return nil, *resp, nil
+}
+
+// resolveOfferingClass applies the convertible default (the EC2 client's own
+// default, so omitting the field keeps pre-existing behavior) and validates.
+func resolveOfferingClass(s string) (OfferingClass, error) {
+	if s == "" {
+		return OfferingClassConvertible, nil
+	}
+	return ValidateOfferingClass(s)
 }
 
 // ec2ComputeDimensions holds the validated, possibly-defaulted EC2 RI
