@@ -223,10 +223,11 @@ func TestSavingsPlanPreviewShowsTotalCommitmentOffline(t *testing.T) {
 }
 
 func TestSavingsPlanCostDoesNotChangeIdempotencyKey(t *testing.T) {
+	t.Parallel()
 	rec := spRec(t, 10)
 	withCost := rec
 	withCost.CommitmentCost = 0
 	assert.Equal(t,
-		idempotencyKeyFor("us-east-1", rec, "s", ""),
-		idempotencyKeyFor("us-east-1", withCost, "s", ""))
+		idempotencyKeyFor("us-east-1", rec, "s", "", ""),
+		idempotencyKeyFor("us-east-1", withCost, "s", "", ""))
 }

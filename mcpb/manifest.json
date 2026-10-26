@@ -88,34 +88,34 @@
       "type": "number",
       "title": "Maximum hourly commitment (USD/hour)",
       "description": "Per-call ceiling on a Savings Plan hourly commitment. Required before any real Savings Plan purchase. Applies per call, not cumulatively.",
-      "min": 1,
+      "min": 0,
       "required": false
     },
     "max_memory_gb": {
       "type": "number",
       "title": "Maximum committed memory (GB)",
       "description": "Per-call ceiling on memory for a GCP CUD. Required before any real GCP CUD purchase. Applies per call, not cumulatively.",
-      "min": 1,
+      "min": 0,
       "required": false
     },
     "max_commitment_usd": {
       "type": "number",
       "title": "Maximum commitment per purchase call (USD)",
       "description": "Per-call ceiling on the total USD one purchase commits over its full term, priced by the provider just before buying. Required before any real purchase: leave it empty and purchases are refused. USD only; purchases that cannot be priced (including real GCP CUD purchases for now) are refused. Applies per call, not cumulatively.",
-      "min": 1,
+      "min": 0,
       "required": false
     },
     "budget_usd": {
       "type": "number",
       "title": "Cumulative purchase budget per server process (USD)",
       "description": "Total USD that real purchases may commit over their full terms in one server process. Required before any real purchase: leave it empty and purchases are refused. Held in memory: it resets when the server restarts, is not shared across processes or MCP clients, and cannot see purchases made in the cloud console, CLI or elsewhere. A purchase with an unknown outcome counts as spent.",
-      "min": 1,
+      "min": 0,
       "required": false
     },
     "archera_api_key": {
       "type": "string",
       "title": "Archera API key",
-      "description": "Optional. Enables the read-only Archera plan comparison tool. Sent only to https://api.archera.ai. Leave empty to keep the tool disabled.",
+      "description": "Optional. Enables the read-only Archera plan listing and comparison tools. Sent only to https://api.archera.ai. Leave empty to keep the tools disabled.",
       "sensitive": true,
       "required": false,
       "default": ""
@@ -130,7 +130,7 @@
     "archera_plan_id": {
       "type": "string",
       "title": "Archera commitment plan ID",
-      "description": "Optional. Archera commitment plan UUID to compare, used with the API key above.",
+      "description": "Optional. Archera commitment plan UUID to list or compare, used with the API key above.",
       "required": false,
       "default": ""
     }

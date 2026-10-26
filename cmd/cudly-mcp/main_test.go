@@ -217,6 +217,7 @@ func TestMainAuditLockTimeout(t *testing.T) {
 }
 
 func TestMainRejectsStdoutAuditLogBeforeProtocolTraffic(t *testing.T) {
+	t.Parallel()
 	info, err := os.Stat("/dev/stdout")
 	if err != nil {
 		t.Skipf("/dev/stdout unavailable: %v", err)
@@ -280,9 +281,9 @@ func TestMainRejectsStdoutAuditLogBeforeProtocolTraffic(t *testing.T) {
 // purchase failed at ResolveClient with "provider aws is not registered"
 // before ever reaching AWS.
 //
-// This test MUST live in package main under cmd/cudly-mcp/ -- go test
-// ./mcp/... does not catch this bug even with the blank imports reverted,
-// because a test binary for the mcp or mcp/tools package never pulls in
+// This test MUST live in package main under cmd/cudly-mcp/ -- tests in the
+// root or tools packages (`go test . ./tools/...`) do not catch this bug even
+// with the blank imports reverted, because their test binaries never pull in
 // cmd/cudly-mcp's imports. Only a test in this package has the blank
 // imports in its own dependency graph, so only here does reverting them
 // actually flip provider.CreateProvider("aws") back to unregistered.

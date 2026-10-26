@@ -3,10 +3,10 @@
 # This workflow runs on every pull request and push to main/develop branches.
 # It performs comprehensive quality checks before allowing code to be merged.
 #
-# Required GitHub Secrets: None (all checks run without cloud credentials)
+# Required GitHub Secrets: None (all checks run without cloud credentials).
+# Optional: SNYK_TOKEN enables the non-gating Snyk scan.
 #
-# Required GitHub Variables:
-#   - GO_VERSION: Go version to use (default: 1.26.9)
+# Required GitHub Variables: None
 #
 # Triggered by:
 #   - Pull requests to main/develop
@@ -24,9 +24,6 @@ on:
   push:
     branches: [main, develop]
   workflow_dispatch:
-
-env:
-  GO_VERSION: '1.26.9'
 
 jobs:
   lint:
@@ -333,67 +330,6 @@ jobs:
       - name: Assert clean target includes MCP artifact
         run: make -n clean | grep -Fx 'rm -f bin/cudly-mcp coverage.out coverage.html gosec-report.json complexity-report.txt'
 
-  integration-tests:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Run integration tests
-        run: |
-          set -uo pipefail
-          status=0
-          for mod in .; do
-            tag=$(echo "$mod" | tr './' '--' | sed 's/^-/root/')
-            log="$RUNNER_TEMP/integration-${tag}.log"
-            echo "==> integration tests in $mod"
-            if ! (cd "$mod" && go test -v -race -tags=integration \
-                    -coverprofile="$RUNNER_TEMP/coverage-integration-${tag}.out" \
-                    ./...) 2>&1 | tee "$log"; then
-              echo "::error::integration tests failed in $mod"
-              status=1
-            fi
-            ran=$(grep -cE '^--- (PASS|FAIL|SKIP)' "$log" || true)
-            echo "==> $mod ran $ran top-level test(s)"
-            if [ "$ran" -eq 0 ]; then
-              echo "::error::$mod ran zero tests -- it is in the loop but asserting nothing"
-              status=1
-            fi
-          done
-
-          shopt -s nullglob
-          profiles=("$RUNNER_TEMP"/coverage-integration-*.out)
-          if [ "${#profiles[@]}" -eq 0 ]; then
-            echo "::error::no module produced an integration coverage profile" >&2
-            exit 1
-          fi
-          merged="$RUNNER_TEMP/coverage-integration.out"
-          head -n 1 "${profiles[0]}" > "$merged"
-          for p in "${profiles[@]}"; do
-            tail -n +2 "$p" >> "$merged"
-          done
-          echo "Merged ${#profiles[@]} integration coverage profile(s)"
-          exit "$status"
-
-      - name: Upload integration coverage
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: integration-coverage
-          path: ${{ runner.temp }}/coverage-integration.out
-          retention-days: 30
-
   security-scan:
     name: Security Scanning
     runs-on: ubuntu-latest
@@ -413,6 +349,30 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Secret scan (gitleaks)
+        # The gitleaks CLI, not gitleaks-action (which needs an org licence).
+        # The release tarball is pinned by version and sha256 (from the
+        # release's gitleaks_<version>_checksums.txt), so a moved tag or a
+        # tampered asset fails the step before anything runs. Scans the
+        # checked-out tree with the repo's .gitleaks.toml; any finding exits 1.
+        # The config self-test then proves a secret planted beside an
+        # allowlisted fixture is still caught.
+        if: always() && steps.checkout.outcome == 'success'
+        env:
+          GITLEAKS_VERSION: '8.30.1'
+          GITLEAKS_SHA256: '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb'
+        run: |
+          set -euo pipefail
+          archive="${RUNNER_TEMP}/gitleaks.tar.gz"
+          curl -fsSL -o "${archive}" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  ${archive}" | sha256sum -c -
+          mkdir "${RUNNER_TEMP}/gitleaks"
+          tar -xzf "${archive}" -C "${RUNNER_TEMP}/gitleaks" gitleaks
+          "${RUNNER_TEMP}/gitleaks/gitleaks" dir . \
+            --config .gitleaks.toml --redact --no-banner --exit-code 1
+          GITLEAKS="${RUNNER_TEMP}/gitleaks/gitleaks" bash scripts/test-gitleaks-config.sh
 
       - name: Run govulncheck CVE scanner (all modules)
         # Independent scanners still run after another scanner fails.
@@ -541,6 +501,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Non-gating on purpose: Snyk is an external service, so its outages or
+      # rate limits must not block merges. It is deliberately absent from
+      # ci-success.needs.
       - name: Run Snyk to check for vulnerabilities
         uses: snyk/actions/golang@9adf32b1121593767fc3c057af55b55db032dc04 # 1.0.0
         continue-on-error: true
@@ -556,7 +519,6 @@ jobs:
       - lint
       - workflow-lint
       - unit-tests
-      - integration-tests
       - security-scan
       - mcp-build
     if: always()

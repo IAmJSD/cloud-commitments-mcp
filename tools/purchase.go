@@ -30,7 +30,7 @@ const (
 // every real (non-preview) purchase this server executes. The model-supplied
 // confirm flag (decidePurchaseMode) only proves the model asked to spend
 // money; it says nothing about whether the operator running this MCP server
-// process wants it able to. mcp/README.md previously documented confirm as
+// process wants it able to. README.md previously documented confirm as
 // "a guardrail against an accidental call, not an authorization control",
 // which left a prompt-injected or simply hallucinating model, given ambient
 // production credentials, able to execute a real purchase from a single tool
@@ -98,165 +98,14 @@ type PurchaseRequest struct {
 	// hazard on Azure specifically.
 	CredentialScope string
 
+	// OfferingClass is the EC2 RI offering class (standard|convertible).
+	// Empty for every other tool. It is price-affecting, so it is folded into
+	// the idempotency key, echoed in the response, and passed to the provider.
+	OfferingClass string
+
 	Recommendation common.Recommendation
 	DryRun         bool
 	Confirm        bool
-}
-
-// CredentialScope resolves the account/subscription/project identifier that
-// bounds where a purchase lands: the caller-supplied override when present,
-// otherwise the first non-empty value among the ambient environment
-// variables the matching provider factory itself consults (e.g.
-// AZURE_SUBSCRIPTION_ID, providers/azure/provider.go's
-// resolveDefaultSubscription).
-//
-// It returns "" when neither is set, which is correct rather than an error:
-// a provider that resolves its account purely from ambient credentials
-// (single visible Azure subscription, AWS STS identity, ambient GCP project)
-// is unambiguous for the life of the server process, so there is no second
-// scope for a token to collide with.
-//
-// Normalization here is limited to trimming, because it is the only rule that
-// is safe for all three providers. Case is deliberately NOT folded: AWS named
-// profiles are case-sensitive section names in ~/.aws/config, so lower-casing
-// one could name a profile that does not exist or a different one that does.
-// Azure subscription IDs ARE case-insensitive and do need folding -- see
-// azureCredentialScope in azure_compute_ri.go, which wraps this.
-func CredentialScope(explicit string, envVars ...string) string {
-	if s := strings.TrimSpace(explicit); s != "" {
-		return s
-	}
-	for _, env := range envVars {
-		if s := strings.TrimSpace(os.Getenv(env)); s != "" {
-			return s
-		}
-	}
-	return ""
-}
-
-// requestCredentialScope resolves the audit/idempotency scope for the selected
-// mode: previews must not record an ambient account they never resolved, while
-// real purchases must keep the provider-env fallback used by authorization.
-func requestCredentialScope(explicit string, dryRun bool, envVars ...string) string {
-	if dryRun {
-		return CredentialScope(explicit)
-	}
-	return CredentialScope(explicit, envVars...)
-}
-
-// credentialScopeSource describes where a provider's credential scope can come
-// from: the tool argument that supplies it, and the ambient environment
-// variable that can supply it instead, if the provider has one.
-//
-// envVar must name a variable the matching provider factory ITSELF consults,
-// so a scope inherited from the environment always identifies the account the
-// purchase really lands in. A variable the factory ignores would make the
-// token positively assert the wrong account -- worse than having no fallback,
-// which is why gcp has none (see credentialScopeSourceFor).
-type credentialScopeSource struct {
-	arg    string
-	envVar string
-}
-
-// credentialScopeSourceFor returns how p's credential scope may be supplied,
-// so requireCredentialScope's refusal can name exactly what the caller has to
-// do. Unknown providers are an explicit error rather than a generic message: a
-// provider added without an entry here would otherwise get a refusal it cannot
-// act on (feedback_no_silent_fallbacks).
-//
-// GCP deliberately has NO environment fallback, and this is a decision rather
-// than an omission -- do not "fix" it by adding one:
-//
-//   - Nothing in providers/gcp reads GOOGLE_CLOUD_PROJECT or
-//     CLOUDSDK_CORE_PROJECT, so adding either here would invent a convention
-//     the provider does not honor.
-//   - Worse, it would be unsafe. When no project is configured, the provider
-//     falls back to getDefaultProject (providers/gcp/provider.go), which
-//     returns the FIRST ACTIVE PROJECT in the caller's ListProjects response
-//     -- an artifact of IAM visibility and API ordering, not a project anyone
-//     declared. An env-supplied scope could therefore name project A while the
-//     purchase landed in project B, making the idempotency token assert an
-//     account it never touched. That is the aliasing hazard
-//     requireCredentialScope exists to remove, in a worse form.
-//
-// So a real GCP purchase must name gcp_project_id. That is a stated contract
-// (documented in mcp/README.md and in the tool's own schema), not an accident
-// of the gate: "whichever project happens to be listed first" is not a
-// defensible default for spending money.
-func credentialScopeSourceFor(p common.ProviderType) (credentialScopeSource, error) {
-	switch p {
-	case common.ProviderAWS:
-		return credentialScopeSource{arg: "aws_profile", envVar: "AWS_PROFILE"}, nil
-	case common.ProviderAzure:
-		return credentialScopeSource{arg: "azure_subscription_id", envVar: "AZURE_SUBSCRIPTION_ID"}, nil
-	case common.ProviderGCP:
-		return credentialScopeSource{arg: "gcp_project_id"}, nil
-	default:
-		return credentialScopeSource{}, fmt.Errorf("internal error: no credential-scope source defined for provider %q", p)
-	}
-}
-
-// requireCredentialScope refuses a REAL purchase whose credential scope could
-// not be determined. Previews are unaffected (ExecutePurchase returns before
-// calling this), so a caller can still price a purchase without naming an
-// account.
-//
-// This exists because an empty scope is a DOUBLE-PURCHASE hazard, not merely
-// an imprecise audit line. idempotencyKeyFor folds the scope into the token,
-// and CredentialScope returns "" when neither the explicit argument nor the
-// ambient environment variable is set. The same target account reached two
-// ways therefore derives two DIFFERENT tokens:
-//
-//	omit azure_subscription_id (ambient resolves to sub-X) -> scope ""
-//	pass azure_subscription_id="sub-X"                     -> scope "sub-X"
-//
-// Both purchase into sub-X, but every provider's dedupe is token-keyed --
-// Azure's FindReservationOrderByIdempotencyToken, GCP's
-// idempotentCommitmentName, and on AWS the EC2/Redshift tag lookups
-// (findRIByIdempotencyToken), the RDS/ElastiCache/OpenSearch/MemoryDB
-// idempotencyGuard, and Savings Plans' CreateSavingsPlanInput.ClientToken --
-// so the second call's lookup misses and buys again. Previewing without the
-// account and then re-calling with it explicit is ordinary self-correcting
-// model behavior, which makes this a likely sequence rather than a corner
-// case.
-//
-// The fix is to make "" unreachable for a real purchase. Note that explicit
-// and ambient do NOT diverge once a value exists: CredentialScope falls back
-// to the same environment variable the provider factory itself consults, so
-// aws_profile="prod" and an ambient AWS_PROFILE=prod both yield "prod" and
-// dedupe correctly. Only the both-absent case aliases, and this closes it.
-//
-// Deriving the effective account from the resolved client would be the
-// stronger fix, but provider.ServiceClient exposes no account accessor
-// (pkg/provider/interface.go), so that needs an interface change across every
-// AWS/Azure/GCP service client and does not belong on this branch. Failing
-// closed removes the hazard by construction in the meantime: on an
-// LLM-driven money path, making the operator name the target account before
-// spending is the same posture as EnvEnableRealPurchases.
-func requireCredentialScope(p common.ProviderType, scope string) error {
-	if strings.TrimSpace(scope) != "" {
-		return nil
-	}
-	src, err := credentialScopeSourceFor(p)
-	if err != nil {
-		return err
-	}
-	// Providers with an ambient fallback get a "could not be determined"
-	// message naming both ways to supply it. GCP has none by design, so
-	// telling a caller their environment failed to provide something it never
-	// could would send them debugging the wrong thing; it gets a plain
-	// "required" instead.
-	if src.envVar == "" {
-		return fmt.Errorf("refusing real purchase: %s is required for a real %s purchase and was not supplied. "+
-			"There is no environment fallback: with no project named, the provider would spend in whichever "+
-			"project happens to be listed first for your credentials, and the idempotency token could not "+
-			"identify the account, so a retry might not dedupe and could purchase twice. Dry runs do not require it",
-			src.arg, p)
-	}
-	return fmt.Errorf("refusing real purchase: the target account could not be determined, so pass %s explicitly "+
-		"(or set %s). Leaving it to ambient credentials derives a different idempotency token than naming the "+
-		"same account explicitly, so a retry would not dedupe and could purchase twice. Dry runs do not require it",
-		src.arg, src.envVar)
 }
 
 // ResolveDryRunConfirm applies the dry_run=true / confirm=false defaults to a
@@ -311,9 +160,12 @@ type PurchaseResponse struct {
 
 	CommitmentID string `json:"commitment_id,omitempty"`
 	Error        string `json:"error,omitempty"`
-	TermYears    int    `json:"term_years,omitempty"`
-	Success      bool   `json:"success"`
-	DryRun       bool   `json:"dry_run"`
+	// OfferingClass echoes the EC2 RI offering class so the user sees it in
+	// the preview before buying; omitted for other products.
+	OfferingClass string `json:"offering_class,omitempty"`
+	TermYears     int    `json:"term_years,omitempty"`
+	Success       bool   `json:"success"`
+	DryRun        bool   `json:"dry_run"`
 }
 
 // ArcheraOffer is the post-purchase Archera underutilization-insurance offer.
@@ -400,123 +252,6 @@ func rfc3339OrNil(t time.Time) *string {
 
 func purchaseSucceeded(result common.PurchaseResult) bool {
 	return result.Success && result.Error == nil
-}
-
-// idempotencyKeyFor derives a stable per-request key from every field that
-// identifies what is being bought: provider, region, service, resource type,
-// count, term, payment option, plus every service-specific dimension held in
-// rec.Details (see detailsKeyComponent) -- platform/tenancy/scope for EC2
-// RIs, engine/az_config for RDS RIs, engine for ElastiCache RIs, hourly
-// commitment/instance family for Savings Plans, memory for GCP CUDs. A
-// caller re-driving the exact same tool call (e.g. after a network timeout)
-// reuses the same common.DeriveIdempotencyToken output and the provider
-// dedupes the retry instead of double-purchasing; a request that differs in
-// ANY price- or identity-affecting dimension derives a different key instead
-// of silently colliding with an unrelated purchase (issue found in review:
-// a $5/hr and $50/hr Compute Savings Plan previously shared a token because
-// only HourlyCommitment differed and Details was never consulted). This is a
-// request-scoped substitute for the purchase_executions row that the CLI/web
-// paths use as their idempotency anchor (pkg/common/tokens.go) -- the MCP
-// server has no such row, so the request's own identifying fields play that
-// role.
-//
-// rec.Account is deliberately excluded: no *FromArgs constructor in this
-// package populates it today, so folding it in would add an always-empty,
-// misleading key component rather than real discrimination. scope carries
-// that information instead -- see below.
-//
-// scope (the caller's AWS profile / Azure subscription / GCP project, via
-// PurchaseRequest.CredentialScope) is folded in because the product
-// dimensions above describe WHAT is bought but not WHERE it lands. Omitting
-// it is not merely imprecise, it silently skips real purchases on Azure:
-// reservations.FindReservationOrderByIdempotencyToken lists reservation
-// orders from the TENANT-wide endpoint (no subscription prefix -- see
-// ReservationOrdersListURL), so an identical VM reservation requested for a
-// second subscription in the same tenant would match the first
-// subscription's order by token, short-circuit, and report success without
-// buying anything for the second subscription. AWS (per-account tag/
-// ClientToken lookups) and GCP (per-project commitment names) scope their
-// own dedupe, so this is defense in depth there and load-bearing on Azure.
-//
-// This function is deliberately fail-safe with respect to time: it folds in
-// no clock reading of any kind. When nonce is empty (the default), two calls
-// with identical dimensions ALWAYS derive the same key, no matter how far
-// apart in time they happen -- so a retry that straddles any time boundary
-// still dedupes at the provider instead of risking a double purchase. An
-// earlier version of this function instead folded in an automatic hourly
-// time bucket to distinguish "buy 3 RIs now" from a genuinely separate "buy
-// 3 more next week" with identical parameters; that inverted the safety
-// direction of this money path, because a retry that happened to straddle
-// an hour boundary (e.g. a slow request issued at 12:59:58 retried at
-// 13:00:02) derived a different key and could double-buy. The worst case of
-// the current, fail-safe default is a skipped intentional repeat -- a
-// caller who genuinely wants a second, identical purchase must say so
-// explicitly. nonce is that explicit opt-in: when the caller supplies a
-// non-empty nonce, it is folded into the key so an otherwise-identical
-// purchase becomes a distinct one (e.g. "buy 3 now" then "buy 3 more next
-// week" by passing a fresh nonce on the second call); the same nonce plus
-// the same dimensions still dedupes a nonce'd retry.
-func idempotencyKeyFor(region string, rec common.Recommendation, scope, nonce string) string {
-	return fmt.Sprintf("mcp:%s:%s:%s:%s:%s:%d:%s:%s:%s:%s",
-		rec.Provider, scope, region, rec.Service, rec.ResourceType, rec.Count, rec.Term, rec.PaymentOption,
-		detailsKeyComponent(rec.Details), nonce)
-}
-
-// detailsKeyComponent returns a canonical, deterministic encoding of every
-// field in rec.Details that the purchase tools in this package populate, so
-// idempotencyKeyFor can fold service-specific price-affecting dimensions
-// into the token. Each case lists every field of its concrete Details type
-// explicitly (not a hand-picked subset) so a field added to one of these
-// types later shows up here as a visible diff rather than a silent key gap.
-// Returns "" for nil or an unrecognized Details (e.g.
-// azure_compute_ri.go's tool, whose recommendation carries no Details at
-// all).
-func detailsKeyComponent(details common.ServiceDetails) string {
-	switch d := details.(type) {
-	case *common.ComputeDetails:
-		return computeDetailsKey(d)
-	case common.ComputeDetails:
-		return computeDetailsKey(&d)
-	case *common.DatabaseDetails:
-		return databaseDetailsKey(d)
-	case *common.CacheDetails:
-		return cacheDetailsKey(d)
-	case *common.SavingsPlanDetails:
-		return savingsPlanDetailsKey(d)
-	default:
-		return ""
-	}
-}
-
-func computeDetailsKey(d *common.ComputeDetails) string {
-	if d == nil {
-		return ""
-	}
-	return fmt.Sprintf("instance_type=%s;platform=%s;tenancy=%s;scope=%s;vcpu=%d;memory_gb=%g",
-		d.InstanceType, d.Platform, d.Tenancy, d.Scope, d.VCPU, d.MemoryGB)
-}
-
-func databaseDetailsKey(d *common.DatabaseDetails) string {
-	if d == nil {
-		return ""
-	}
-	return fmt.Sprintf("engine=%s;engine_version=%s;az_config=%s;instance_class=%s;deployment=%s",
-		d.Engine, d.EngineVersion, d.AZConfig, d.InstanceClass, d.Deployment)
-}
-
-func cacheDetailsKey(d *common.CacheDetails) string {
-	if d == nil {
-		return ""
-	}
-	return fmt.Sprintf("engine=%s;node_type=%s;shards=%d", d.Engine, d.NodeType, d.Shards)
-}
-
-func savingsPlanDetailsKey(d *common.SavingsPlanDetails) string {
-	if d == nil {
-		return ""
-	}
-	return fmt.Sprintf("plan_type=%s;hourly_commitment=%g;coverage=%s;instance_family=%s;region=%s;offering_id=%s",
-		d.PlanType, d.HourlyCommitment, d.Coverage, d.InstanceFamily, d.Region, d.OfferingID)
 }
 
 // logPurchaseAttempt and logPurchaseOutcome write the MCP server's stderr
@@ -614,6 +349,43 @@ func authorizeRealPurchase(req PurchaseRequest, rec common.Recommendation) (purc
 	return purchaseLimits{usd: usdLimit, budget: budget}, nil
 }
 
+// preflightRealPurchase runs every gate that can refuse a real purchase
+// before PurchaseCommitment is called: authorizeRealPurchase, client
+// resolution, the USD cap and the cumulative budget. Any error it returns is
+// a refusal, and ExecutePurchase audits it once via recordPurchaseRefusal.
+func preflightRealPurchase(ctx context.Context, req PurchaseRequest, rec common.Recommendation) (provider.ServiceClient, *budgetReservation, error) {
+	limits, err := authorizeRealPurchase(req, rec)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := req.ResolveClient(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve %s service client: %w", rec.Provider, err)
+	}
+	usd, err := enforceUSDCap(ctx, client, rec, req.OfferingClass, limits.usd)
+	if err != nil {
+		return nil, nil, err
+	}
+	reservation, err := reserveBudget(usd, limits.budget)
+	if err != nil {
+		return nil, nil, err
+	}
+	log.Printf("mcp budget: reserved %.2f of %.2f USD (committed %.2f)", usd, limits.budget, reservation.committed)
+	return client, reservation, nil
+}
+
+// recordPurchaseRefusal is the single place a pre-purchase refusal leaves a
+// trace: one stderr line and one audit record with status "refused", the
+// refusal text in error_message and the requested scope in the recommendation
+// fields. Free-form values are %q-quoted so one refusal stays on one stderr
+// line. Nothing was bought, so no commitment ID or provider result exists.
+func recordPurchaseRefusal(req PurchaseRequest, rec common.Recommendation, reason error) {
+	log.Printf("mcp purchase REFUSED: provider=%s scope=%q region=%q service=%q resource=%q count=%d term=%q payment=%q: %q",
+		rec.Provider, req.CredentialScope, req.Region, rec.Service, rec.ResourceType, rec.Count,
+		rec.Term, rec.PaymentOption, reason.Error())
+	recordPurchaseAudit(rec, req.CredentialScope, common.PurchaseResult{Error: reason}, auditStatusRefused, false)
+}
+
 // ExecutePurchase runs the shared dry_run/confirm safety gate, then every
 // gate in authorizeRealPurchase (operator opt-in via EnvEnableRealPurchases,
 // and a determinable target account), and for a real purchase that clears
@@ -640,39 +412,28 @@ func ExecutePurchase(ctx context.Context, req PurchaseRequest) (*PurchaseRespons
 			EstimatedSavings:  nonZeroCostPtr(rec.EstimatedSavings),
 			SavingsPercentage: nonZeroCostPtr(rec.SavingsPercentage),
 			TermYears:         termYearsFromRecommendationTerm(rec.Term),
+			OfferingClass:     req.OfferingClass,
 		}, nil
 	}
 
-	// Named authErr rather than err: `err :=` here trips govet's shadow check
-	// against the err declared above, while `err =` trips gocritic's
-	// sloppyReassign. A distinct name satisfies both (same reason as
-	// validateSavingsPlanArgs' commitErr in aws_savingsplans.go).
-	limits, authErr := authorizeRealPurchase(req, rec)
-	if authErr != nil {
-		return nil, authErr
+	client, reservation, refusal := preflightRealPurchase(ctx, req, rec)
+	if refusal != nil {
+		recordPurchaseRefusal(req, rec, refusal)
+		return nil, refusal
 	}
 
-	client, err := req.ResolveClient(ctx)
+	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec, req.CredentialScope, req.Nonce, req.OfferingClass), 0)
+	requestedAt, err := firstAttemptTime(token, rec.Service)
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s service client: %w", rec.Provider, err)
+		reservation.settle(false)
+		recordPurchaseRefusal(req, rec, err)
+		return nil, err
 	}
-
-	// Like a ResolveClient failure, a cap refusal happens before any purchase
-	// attempt and writes no audit record.
-	usd, capErr := enforceUSDCap(ctx, client, rec, limits.usd)
-	if capErr != nil {
-		return nil, capErr
-	}
-	reservation, budgetErr := processBudget.reserve(usd, limits.budget)
-	if budgetErr != nil {
-		return nil, budgetErr
-	}
-	log.Printf("mcp budget: reserved %.2f of %.2f USD (committed %.2f)", usd, limits.budget, processBudget.committedUSD())
-
-	token := common.DeriveIdempotencyToken(idempotencyKeyFor(req.Region, rec, req.CredentialScope, req.Nonce), 0)
 	opts := common.PurchaseOptions{
 		Source:           common.PurchaseSourceMCP,
 		IdempotencyToken: token,
+		OfferingClass:    req.OfferingClass,
+		RequestedAt:      requestedAt,
 	}
 
 	return purchaseAndSettle(ctx, req, client, opts, reservation)
@@ -701,7 +462,9 @@ func purchaseAndSettle(ctx context.Context, req PurchaseRequest, client provider
 	logPurchaseOutcome(rec, token, auditResult.CommitmentID, purchaseSucceeded(auditResult), auditResult.Error)
 	recordPurchaseAudit(rec, req.CredentialScope, auditResult, auditStatusFor(auditResult), false)
 
-	return purchaseResponse(rec, result), nil
+	resp := purchaseResponse(rec, result)
+	resp.OfferingClass = req.OfferingClass
+	return resp, nil
 }
 
 // purchaseResponse maps a provider result to the tool response.

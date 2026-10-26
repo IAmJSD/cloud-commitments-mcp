@@ -6,6 +6,8 @@
 package mcp
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 
 	gosdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +35,7 @@ func registrations() []tools.Registration {
 		tools.NewAzureComputeRIPurchaseTool(),
 		tools.NewGCPComputeEngineCUDPurchaseTool(),
 		tools.NewArcheraComparisonTool(),
+		tools.NewArcheraLineItemsTool(),
 	}
 }
 
@@ -44,15 +47,17 @@ func registrations() []tools.Registration {
 //	server, err := mcp.NewServer("1.0.0")
 //	server.Run(ctx, &gosdk.StdioTransport{})
 func NewServer(version string) (*gosdk.Server, error) {
-	// A server that cannot durably write its purchase audit trail should not accept
-	// purchase calls at all. Failing here surfaces a misconfigured
-	// CUDLY_MCP_AUDIT_LOG at startup instead of silently dropping every
-	// audit record for the session.
+	// Startup-only check: refuse to build a server whose configured audit log
+	// (CUDLY_MCP_AUDIT_LOG) is unusable, so a misconfigured path surfaces here
+	// instead of silently dropping every record. It does not gate individual
+	// calls: a write failure later in a call only logs a warning on stderr and
+	// leaves the purchase result unchanged (tools/audit.go recordPurchaseAudit).
 	if err := tools.EnsureAuditLogWritable(); err != nil {
 		return nil, fmt.Errorf("audit log is not readable, writable, and directory-durable: %w", err)
 	}
 
 	s := gosdk.NewServer(&gosdk.Implementation{Name: ServerName, Version: version}, nil)
+	s.AddReceivingMiddleware(nullArgumentsAsEmptyObject)
 
 	regs := registrations()
 	descriptors := make([]tools.Descriptor, 0, len(regs)+1)
@@ -74,4 +79,17 @@ func NewServer(version string) (*gosdk.Server, error) {
 	}
 
 	return s, nil
+}
+
+// nullArgumentsAsEmptyObject rewrites an explicit `"arguments": null` on
+// tools/call to {} because go-sdk v1.8.0 (mcp/tool.go:98-117) unmarshals it
+// into a nil map and jsonschema-go ApplyDefaults then panics, killing the server.
+func nullArgumentsAsEmptyObject(next gosdk.MethodHandler) gosdk.MethodHandler {
+	return func(ctx context.Context, method string, req gosdk.Request) (gosdk.Result, error) {
+		if call, ok := req.(*gosdk.CallToolRequest); ok && call.Params != nil &&
+			bytes.Equal(bytes.TrimSpace(call.Params.Arguments), []byte("null")) {
+			call.Params.Arguments = []byte("{}")
+		}
+		return next(ctx, method, req)
+	}
 }

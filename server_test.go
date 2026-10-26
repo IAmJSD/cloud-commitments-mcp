@@ -232,6 +232,49 @@ func TestListCommitmentActionsIncludesItself(t *testing.T) {
 	}
 	assert.Contains(t, names, "cudly_list_commitment_actions",
 		"the catalog cudly_list_commitment_actions returns must include its own entry, got: %v", names)
+	assert.Contains(t, names, "cudly_archera_line_items")
+	for _, action := range catalog.Actions {
+		if action.Name == "cudly_archera_line_items" {
+			assert.Equal(t, "insurance", action.Product)
+			assert.Equal(t, "line_items", action.Action)
+			assert.False(t, action.RealPurchaseEnabled)
+			assert.NotEmpty(t, action.ExamplePrompts)
+			assert.Contains(t, action.Description, "cudly_archera_comparison")
+		}
+	}
+}
+
+func TestArcheraListingRootDiscoveryWithoutConfiguration(t *testing.T) {
+	t.Setenv(tools.EnvArcheraAPIKey, "")
+	t.Setenv(tools.EnvArcheraOrgID, "")
+	t.Setenv(tools.EnvArcheraPlanID, "")
+	ctx := context.Background()
+	server, err := NewServer("test")
+	require.NoError(t, err, "discovery must not require a vendor request or credentials")
+	ct, st := gosdk.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, st, nil)
+	require.NoError(t, err)
+	defer ss.Close()
+	cs, err := gosdk.NewClient(&gosdk.Implementation{Name: "listing-root-test"}, nil).Connect(ctx, ct, nil)
+	require.NoError(t, err)
+	defer cs.Close()
+	listed, err := cs.ListTools(ctx, nil)
+	require.NoError(t, err)
+	var listing *gosdk.Tool
+	for _, tool := range listed.Tools {
+		if tool.Name == "cudly_archera_line_items" {
+			listing = tool
+		}
+	}
+	require.NotNil(t, listing)
+	require.NotNil(t, listing.Annotations)
+	assert.True(t, listing.Annotations.ReadOnlyHint)
+	assert.True(t, *listing.Annotations.OpenWorldHint)
+	assert.False(t, *listing.Annotations.DestructiveHint)
+	result, err := cs.CallTool(ctx, &gosdk.CallToolParams{Name: listing.Name, Arguments: map[string]any{}})
+	require.NoError(t, err)
+	require.True(t, result.IsError)
+	assert.Empty(t, result.StructuredContent)
 }
 
 func TestRealPurchaseToolsDocumentMoneyImpactAndDryRun(t *testing.T) {
@@ -356,4 +399,85 @@ func TestSearchRecommendationsSchemaAdvertisesTermAndPaymentEnums(t *testing.T) 
 	// JSON numbers decode as float64 on the client side, so compare on the
 	// decoded values rather than the ints the server-side override used.
 	assert.ElementsMatch(t, []any{float64(1), float64(3)}, termEnum)
+}
+
+// TestToolCallArgumentsNullOrAbsentApplyDefaults is the regression guard for
+// #95: an explicit `"arguments": null` on a tool with schema defaults used to
+// panic in the SDK's handler goroutine and kill the server process.
+func TestToolCallArgumentsNullOrAbsentApplyDefaults(t *testing.T) {
+	t.Parallel()
+	cases := map[string]any{
+		"null":    json.RawMessage("null"),
+		"omitted": nil,
+		"empty":   map[string]any{},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx := context.Background()
+
+			server, err := NewServer("test")
+			require.NoError(t, err)
+			clientTransport, serverTransport := gosdk.NewInMemoryTransports()
+			go func() { _ = server.Run(ctx, serverTransport) }()
+
+			client := gosdk.NewClient(&gosdk.Implementation{Name: "test-client"}, nil)
+			session, err := client.Connect(ctx, clientTransport, nil)
+			require.NoError(t, err)
+			defer session.Close()
+
+			result, err := session.CallTool(ctx, &gosdk.CallToolParams{
+				Name:      "cudly_aws_ec2_ri_purchase",
+				Arguments: args,
+			})
+			require.NoError(t, err, "server must stay alive and answer")
+			require.True(t, result.IsError, "required fields are missing, so this is a tool error, never a purchase")
+			require.NoError(t, session.Ping(ctx, nil), "server must still be alive after the call")
+		})
+	}
+}
+
+func TestNullArgumentsAsEmptyObjectMiddleware(t *testing.T) {
+	t.Parallel()
+	var got gosdk.Request
+	called := 0
+	next := func(_ context.Context, _ string, req gosdk.Request) (gosdk.Result, error) {
+		got, called = req, called+1
+		return nil, nil
+	}
+	h := nullArgumentsAsEmptyObject(next)
+	callWith := func(args json.RawMessage) *gosdk.CallToolRequest {
+		return &gosdk.CallToolRequest{Params: &gosdk.CallToolParamsRaw{Name: "x", Arguments: args}}
+	}
+
+	for _, in := range []string{"null", " null ", "null\n"} {
+		called = 0
+		_, err := h(context.Background(), "tools/call", callWith(json.RawMessage(in)))
+		require.NoError(t, err)
+		require.Equal(t, 1, called)
+		assert.Equal(t, []byte("{}"), []byte(got.(*gosdk.CallToolRequest).Params.Arguments), "input %q", in)
+	}
+
+	for _, in := range []json.RawMessage{json.RawMessage(`{"a":1}`), json.RawMessage(`{}`), json.RawMessage(`[]`), nil} {
+		called = 0
+		_, err := h(context.Background(), "tools/call", callWith(in))
+		require.NoError(t, err)
+		require.Equal(t, 1, called)
+		assert.Equal(t, in, got.(*gosdk.CallToolRequest).Params.Arguments, "input %q", in)
+	}
+
+	list := &gosdk.ListToolsRequest{}
+	called = 0
+	_, err := h(context.Background(), "tools/list", list)
+	require.NoError(t, err)
+	assert.Equal(t, 1, called)
+	assert.Same(t, list, got)
+
+	nilParams := &gosdk.CallToolRequest{}
+	called = 0
+	require.NotPanics(t, func() { _, err = h(context.Background(), "tools/call", nilParams) })
+	require.NoError(t, err)
+	assert.Equal(t, 1, called)
+	assert.Same(t, nilParams, got)
+	assert.Nil(t, nilParams.Params)
 }

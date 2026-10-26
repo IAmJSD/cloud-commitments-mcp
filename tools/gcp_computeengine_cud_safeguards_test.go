@@ -71,9 +71,10 @@ func (o *fakeGCPCommitmentsOperation) Wait(_ context.Context, _ ...gax.CallOptio
 // later it returns a non-nil pointer to 0.0 (CUDs are billed monthly, with no
 // upfront charge), which marshals to an explicit "cost":0.
 func TestGCPComputeEnginePurchaseReportsExplicitZeroCost(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	client, err := computeengine.NewClient(ctx, "test-project", "us-central1")
+	client, err := computeengine.NewClient("test-project", "us-central1")
 	require.NoError(t, err)
 	fake := &fakeGCPCommitmentsService{}
 	client.SetCommitmentsService(fake)
@@ -120,9 +121,10 @@ func TestGCPComputeEnginePurchaseReportsExplicitZeroCost(t *testing.T) {
 // This pins the library boundary; the search tool's own use of the checker
 // is covered in search_dedupe_test.go.
 func TestGCPComputeEngineDedupeDefersFamilyWithRecentCUD(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
-	client, err := computeengine.NewClient(ctx, "test-project", "us-central1")
+	client, err := computeengine.NewClient("test-project", "us-central1")
 	require.NoError(t, err)
 
 	// A well-formed recent ACTIVE CUD: non-nil name, a known commitment type

@@ -202,6 +202,12 @@ func TestSimpleAWSRIPurchaseHandleRealPurchaseCallsCorrectService(t *testing.T) 
 			args.Confirm = boolPtr(true)
 
 			_, resp, err := tool.handle(context.Background(), nil, args)
+			if product == "redshift" {
+				// Redshift needs the durable first-attempt store (EnvBudgetState).
+				require.ErrorContains(t, err, EnvBudgetState)
+				assert.Zero(t, fake.purchaseCalls)
+				return
+			}
 			require.NoError(t, err)
 			assert.True(t, resp.Success)
 			assert.Equal(t, tool.spec.service, gotService)
