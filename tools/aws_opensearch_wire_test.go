@@ -220,7 +220,7 @@ func expectedOSWireReservationName(t *testing.T, tool *simpleAWSRIPurchaseTool, 
 	rec, region, dryRun, _, err := tool.recommendationFromArgs(args)
 	require.NoError(t, err)
 	scope := requestCredentialScope(args.AWSProfile, dryRun, "AWS_PROFILE")
-	token := common.DeriveIdempotencyToken(idempotencyKeyFor(region, rec, scope, args.IdempotencyNonce), 0)
+	token := common.DeriveIdempotencyToken(idempotencyKeyFor(region, rec, scope, args.IdempotencyNonce, ""), 0)
 	name := common.IdempotentReservationID("opensearch-id-", token)
 	require.NotEmpty(t, name)
 	return name
