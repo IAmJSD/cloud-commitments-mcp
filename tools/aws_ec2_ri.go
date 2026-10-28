@@ -49,7 +49,7 @@ type ec2RIPurchaseArgs struct {
 }
 
 type awsEC2RIPurchaseTool struct {
-	createProvider func(name string, cfg *provider.ProviderConfig) (provider.Provider, error)
+	createProvider func(name string, cfg *provider.Config) (provider.Provider, error)
 }
 
 // NewAWSEC2RIPurchaseTool builds the cudly_aws_ec2_ri_purchase tool.
@@ -230,7 +230,7 @@ func ec2RecommendationFromArgs(args ec2RIPurchaseArgs) (rec common.Recommendatio
 // resolves the provider/service client against a raw, un-trimmed value.
 func (t *awsEC2RIPurchaseTool) resolveClient(args ec2RIPurchaseArgs, region string) ResolveClientFunc {
 	return func(ctx context.Context) (provider.ServiceClient, error) {
-		cfg := &provider.ProviderConfig{Name: string(common.ProviderAWS), AWSProfile: CredentialScope(args.AWSProfile), Region: region}
+		cfg := &provider.Config{Name: string(common.ProviderAWS), AWSProfile: CredentialScope(args.AWSProfile), Region: region}
 		prov, err := t.createProvider(string(common.ProviderAWS), cfg)
 		if err != nil {
 			return nil, err
